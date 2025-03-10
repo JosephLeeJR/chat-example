@@ -55,6 +55,16 @@
         font-style: italic;
       }
 
+      .notification-message {
+        color: #0066cc;
+        font-style: italic;
+      }
+
+      .error-message {
+        color: #cc0000;
+        font-style: italic;
+      }
+
       .own-message {
         font-weight: bold;
       }
@@ -91,6 +101,15 @@
       const updateButton = document.getElementById('update-button');
       const currentUsername = document.getElementById('current-username');
       const currentRoom = document.getElementById('current-room');
+      
+      // Helper function to add system/notification messages
+      function addSystemMessage(text, className = 'system-message') {
+        const item = document.createElement('li');
+        item.classList.add(className);
+        item.textContent = text;
+        messages.appendChild(item);
+        window.scrollTo(0, document.body.scrollHeight);
+      }
       
       // Handle chat message submission
       form.addEventListener('submit', (e) => {
@@ -153,12 +172,6 @@
           while (messages.firstChild) {
             messages.removeChild(messages.firstChild);
           }
-          
-          // Add a system message indicating the room change
-          const item = document.createElement('li');
-          item.classList.add('system-message');
-          item.textContent = `You have joined room: ${info.room}`;
-          messages.appendChild(item);
         }
         
         // Clear input fields after successful update
@@ -168,12 +181,44 @@
       
       // Handle username error
       socket.on('username error', (error) => {
-        alert(error);
+        addSystemMessage(error, 'error-message');
       });
       
-      // Handle username update confirmation
-      socket.on('username updated', (username) => {
-        console.log(`Username updated to: ${username}`);
+      // Handle available rooms notification (1c)
+      socket.on('available rooms', (rooms) => {
+        const roomsList = rooms.map(room => `${room.name} (${room.userCount})`).join('; ');
+        addSystemMessage(`Available chatrooms: ${roomsList}`, 'notification-message');
+      });
+      
+      // Handle room joined notification (2a)
+      socket.on('room joined', (data) => {
+        addSystemMessage(`You are now in ${data.room} (${data.userCount} users connected).`, 'notification-message');
+      });
+      
+      // Handle room users notification (2b)
+      socket.on('room users', (data) => {
+        const usersList = data.users.join(', ');
+        addSystemMessage(`Users connected: ${usersList}`, 'notification-message');
+      });
+      
+      // Handle user joined notification (2c)
+      socket.on('user joined', (data) => {
+        addSystemMessage(`${data.username} has joined ${data.room}. There are now ${data.userCount} users in the room.`, 'notification-message');
+      });
+      
+      // Handle user left notification (3a)
+      socket.on('user left', (data) => {
+        addSystemMessage(`${data.username} has left ${data.room}. There are now ${data.userCount} users in the room.`, 'notification-message');
+      });
+      
+      // Handle username changed notification (4a)
+      socket.on('username changed', (data) => {
+        addSystemMessage(`You are now known as ${data.username}`, 'notification-message');
+      });
+      
+      // Handle user renamed notification (4b)
+      socket.on('user renamed', (data) => {
+        addSystemMessage(`${data.oldUsername} is now known as ${data.newUsername}`, 'notification-message');
       });
     </script>
   </body>

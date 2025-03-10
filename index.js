@@ -9,9 +9,54 @@ const io = new Server(server);
 const users = {};
 let userCount = 0;
 
+// Track rooms and their users
+const rooms = {
+  'General': {} // Default room
+};
+
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/index.html');
 });
+
+// Helper functions for room management
+function getRoomUserCount(roomName) {
+  return rooms[roomName] ? Object.keys(rooms[roomName]).length : 0;
+}
+
+function getAvailableRooms() {
+  return Object.keys(rooms).map(room => {
+    return {
+      name: room,
+      userCount: getRoomUserCount(room)
+    };
+  });
+}
+
+function getRoomUsernames(roomName) {
+  if (!rooms[roomName]) return [];
+  return Object.values(rooms[roomName]).map(userId => users[userId].username);
+}
+
+function addUserToRoom(socketId, roomName) {
+  // Create room if it doesn't exist
+  if (!rooms[roomName]) {
+    rooms[roomName] = {};
+  }
+  
+  // Add user to room
+  rooms[roomName][socketId] = socketId;
+}
+
+function removeUserFromRoom(socketId, roomName) {
+  if (rooms[roomName] && rooms[roomName][socketId]) {
+    delete rooms[roomName][socketId];
+    
+    // Remove empty rooms (except General)
+    if (roomName !== 'General' && Object.keys(rooms[roomName]).length === 0) {
+      delete rooms[roomName];
+    }
+  }
+}
 
 io.on('connection', (socket) => {
   // Generate a default username for new user
@@ -23,6 +68,9 @@ io.on('connection', (socket) => {
     room: 'General'
   };
   
+  // Add user to default room
+  addUserToRoom(socket.id, 'General');
+  
   // Join the default room
   socket.join('General');
   
@@ -32,12 +80,27 @@ io.on('connection', (socket) => {
     room: 'General'
   });
   
-  // Send a welcome message to the room
-  io.to('General').emit('chat message', {
+  // 1a and 1b: Apply notifications for joining a chatroom and new username
+  // 2a: Notify the user about the room they joined
+  socket.emit('room joined', {
     room: 'General',
-    username: 'system',
-    text: `${defaultUsername} has joined the room`,
-    system: true
+    userCount: getRoomUserCount('General')
+  });
+  
+  // 2b: Notify the user about the list of users in the room
+  socket.emit('room users', {
+    room: 'General',
+    users: getRoomUsernames('General')
+  });
+  
+  // 1c: Notify the user about available chatrooms
+  socket.emit('available rooms', getAvailableRooms());
+  
+  // 2c: Notify others in the room that a new user has joined
+  socket.to('General').emit('user joined', {
+    username: defaultUsername,
+    room: 'General',
+    userCount: getRoomUserCount('General')
   });
   
   // Listen for chat messages
@@ -56,6 +119,7 @@ io.on('connection', (socket) => {
   socket.on('update user', ({ username, room }) => {
     const user = users[socket.id];
     const oldRoom = user.room;
+    const oldUsername = user.username;
     let usernameChanged = false;
     let roomChanged = false;
     
@@ -67,15 +131,22 @@ io.on('connection', (socket) => {
       );
       
       if (!isUsernameTaken) {
-        const oldUsername = user.username;
         user.username = username;
         usernameChanged = true;
         
-        // Notify user that the username change was successful
-        socket.emit('username updated', username);
+        // 4a: Notify user about successful username change
+        socket.emit('username changed', {
+          username: username
+        });
+        
+        // 4b: Notify others in the room about username change
+        socket.to(user.room).emit('user renamed', {
+          oldUsername: oldUsername,
+          newUsername: username
+        });
       } else {
-        // Notify user that the username is taken
-        socket.emit('username error', 'Username is already taken');
+        // 5a: Notify user about username conflict
+        socket.emit('username error', `'${username}' is already in use.`);
         return;
       }
     }
@@ -85,12 +156,12 @@ io.on('connection', (socket) => {
       // Leave the current room
       socket.leave(user.room);
       
-      // Notify the old room that the user has left
-      io.to(user.room).emit('chat message', {
+      // 3a: Notify users in old room that this user has left
+      removeUserFromRoom(socket.id, user.room);
+      socket.to(user.room).emit('user left', {
+        username: user.username,
         room: user.room,
-        username: 'system',
-        text: `${user.username} has left the room`,
-        system: true
+        userCount: getRoomUserCount(user.room)
       });
       
       // Join the new room
@@ -98,12 +169,26 @@ io.on('connection', (socket) => {
       user.room = room;
       roomChanged = true;
       
-      // Notify the new room that the user has joined
-      io.to(room).emit('chat message', {
+      // Add user to new room
+      addUserToRoom(socket.id, room);
+      
+      // 2a: Notify user about the room they joined
+      socket.emit('room joined', {
         room: room,
-        username: 'system',
-        text: `${user.username} has joined the room`,
-        system: true
+        userCount: getRoomUserCount(room)
+      });
+      
+      // 2b: Notify user about the list of users in the room
+      socket.emit('room users', {
+        room: room,
+        users: getRoomUsernames(room)
+      });
+      
+      // 2c: Notify others in the new room that this user joined
+      socket.to(room).emit('user joined', {
+        username: user.username,
+        room: room,
+        userCount: getRoomUserCount(room)
       });
     }
     
@@ -121,12 +206,14 @@ io.on('connection', (socket) => {
     if (users[socket.id]) {
       const { username, room } = users[socket.id];
       
-      // Notify the room that the user has left
-      io.to(room).emit('chat message', {
+      // Remove user from room
+      removeUserFromRoom(socket.id, room);
+      
+      // 3a: Notify remaining users in the room that this user left
+      socket.to(room).emit('user left', {
+        username: username,
         room: room,
-        username: 'system',
-        text: `${username} has disconnected`,
-        system: true
+        userCount: getRoomUserCount(room)
       });
       
       // Clean up user data
